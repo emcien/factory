@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+set -xv
+
+# Parse arguments and set some variables based on
+if [[ $# -eq 0 ]] ; then
+  echo 'path to job template must be provided'
+  exit 1
+fi
+
+path=$1
+
+if [[ ! -f $path ]] ; then
+  echo "File '$path' does not exist"
+  exit 1
+fi
+
+filename=$(basename "$path")
+name="${filename%.*}"
+echo -e "\nSaving job '$name'" 1>&2
+
+
+# Check if the job exists
+echo "  ==> Searching for job with name '$name'" 1>&2
+job_find_sql="{ \"sql\": \"select id,description from SYSADMIN.ScheduleJobs WHERE description = '$name';\" }"
+job_id=$(curl -qs -H "Content-Type: application/json" -H "Accept: application/json" -X POST -d "$job_find_sql" "$DV_USER:$DV_PASS@$DV_HOST:$DV_PORT/rest/api/query?array=true&headers=true" | grep -o [0-9]* | head -n 1)
+
+if [ -z "$job_id" ]; then
+  echo "      --> Cannot find job with name '$name'" 1>&2
+
+  job_create_sql='{ "sql": "call SYSADMIN.createSQLJOB('\
+"\\\"script\\\" => '$(printf %q $(< $path))',"\
+"\\\"description\\\" => '$name',"\
+"\\\"parallelRunsAllowed\\\" => 0,"\
+"\\\"retryCounter\\\" => 0,"\
+"\\\"retryDelay\\\" => 0"\
+')"}'
+  echo "  ==> Creating job '$name'" 1>&2
+
+else
+  echo "      --> Found job $job_id with name '$name'" 1>&2
+  job_create_sql='{ "sql": "call SYSADMIN.changeSQLJOB('\
+"\\\"jobid\\\" => '$job_id',"\
+"\\\"script\\\" => '$(cat $path)',"\
+"\\\"description\\\" => '$name',"\
+"\\\"parallelRunsAllowed\\\" => 0,"\
+"\\\"retryCounter\\\" => 0,"\
+"\\\"retryDelay\\\" => 0"\
+')"}'
+  echo "  ==> Updating job '$name'" 1>&2
+fi
+
+# Then make the job schedule
+curl -qs -H "Content-Type: application/json" -H "Accept: application/json" -X POST -d "$job_create_sql" "$DV_USER:$DV_PASS@$DV_HOST:$DV_PORT/rest/api/query?array=true&headers=true" # 1>&2 > /dev/null
